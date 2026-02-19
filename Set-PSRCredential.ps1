@@ -65,7 +65,6 @@ $tmpFile = Join-Path $env:TEMP "psr_api_key.txt"
 Set-Content -Path $tmpFile -Value $plain -Encoding UTF8 -NoNewline
 
 $gistOutput = & $GhExe gist create $tmpFile `
-    --secret `
     --desc "PSR-Tools Anthropic API key ($whoami)" `
     --filename "anthropic_api_key.txt" 2>&1
 
