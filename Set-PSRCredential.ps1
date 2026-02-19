@@ -61,7 +61,7 @@ if (-not $plain -or $plain -notmatch "^sk-ant-") {
 }
 
 # ── Create private Gist ────────────────────────────────────────────────────────
-$tmpFile = Join-Path $env:TEMP "psr_api_key.txt"
+$tmpFile = Join-Path $env:TEMP "anthropic_api_key.txt"
 Set-Content -Path $tmpFile -Value $plain -Encoding UTF8 -NoNewline
 
 $gistOutput = & $GhExe gist create $tmpFile `

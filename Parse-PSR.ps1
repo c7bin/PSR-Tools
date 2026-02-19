@@ -380,8 +380,10 @@ function Get-ApiKey([string]$Explicit) {
         $authCheck = & $script:GhExe auth status 2>&1
         if ($LASTEXITCODE -eq 0) {
             try {
-                $plain = (& $script:GhExe gist view $gistId --filename "anthropic_api_key.txt" --raw 2>&1).Trim()
-                if ($plain -match "^sk-ant-") {
+                $lines = @(& $script:GhExe gist view $gistId --raw 2>$null)
+                $plain = ($lines | Where-Object { $_ -match '^sk-ant-' } | Select-Object -First 1)
+                if ($plain) { $plain = $plain.Trim() }
+                if ($LASTEXITCODE -eq 0 -and $plain -match "^sk-ant-") {
                     Write-Host "  API key fetched from GitHub Gist." -ForegroundColor DarkGray
                     Save-ApiKey $plain   # cache locally for next run
                     return $plain
