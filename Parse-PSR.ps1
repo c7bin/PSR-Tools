@@ -337,21 +337,81 @@ Write-Host "Saved summary.json"
 # ── Cleanup temp ───────────────────────────────────────────────────────────────
 Remove-Item -Path $tempDir -Recurse -Force
 
-# ── Claude API: generate automation.ps1 + walkthrough.md ──────────────────────
-if (-not $SkipGenerate) {
-    # Resolve API key: param → env var → config file
-    if (-not $ApiKey) { $ApiKey = $env:ANTHROPIC_API_KEY }
-    if (-not $ApiKey) {
-        $configPath = Join-Path $PSScriptRoot "config.json"
-        if (Test-Path $configPath) {
-            $cfg    = Get-Content $configPath -Raw | ConvertFrom-Json
-            $ApiKey = $cfg.anthropic_api_key
+# ── Credential helpers ─────────────────────────────────────────────────────────
+# Uses DPAPI via ConvertFrom-SecureString (no Key param = Windows user+machine bound).
+# Encrypted blob stored at %APPDATA%\PSR-Tools\api_key.cred — useless on any other
+# account or machine, safe to leave on disk.
+
+$script:CredFile = Join-Path $env:APPDATA "PSR-Tools\api_key.cred"
+
+function Save-ApiKey([string]$Plain) {
+    $dir = Split-Path $script:CredFile
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    ConvertTo-SecureString $Plain -AsPlainText -Force |
+        ConvertFrom-SecureString |
+        Set-Content -Path $script:CredFile -Encoding UTF8
+}
+
+function Get-ApiKey([string]$Explicit) {
+    # 1. Explicit -ApiKey param (CI / one-off override)
+    if ($Explicit) { return $Explicit }
+
+    # 2. Environment variable
+    if ($env:ANTHROPIC_API_KEY) { return $env:ANTHROPIC_API_KEY }
+
+    # 3. DPAPI-encrypted credential file
+    if (Test-Path $script:CredFile) {
+        try {
+            $plain = Get-Content $script:CredFile -Raw |
+                     ConvertTo-SecureString |
+                     ForEach-Object { [System.Net.NetworkCredential]::new("", $_).Password }
+            if ($plain) { return $plain }
+        } catch {
+            Write-Warning "  Stored key could not be decrypted — will prompt again."
+            Remove-Item $script:CredFile -Force
         }
     }
 
+    # 4. config.json migration (one-time, then key moves to encrypted file)
+    $configPath = Join-Path $PSScriptRoot "config.json"
+    if (Test-Path $configPath) {
+        try {
+            $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
+            $candidate = $cfg.anthropic_api_key.Trim()
+            if ($candidate -and $candidate -notmatch "YOUR_KEY" -and $candidate -match "^sk-ant-api") {
+                Write-Host "  Migrating key from config.json to encrypted credential file..." -ForegroundColor DarkYellow
+                Save-ApiKey $candidate
+                Write-Host "  Saved. You can now delete config.json." -ForegroundColor Green
+                return $candidate
+            }
+        } catch { }
+    }
+
+    # 5. Interactive prompt — only runs on first use
+    Write-Host ""
+    Write-Host "  Anthropic API key needed (one-time setup)." -ForegroundColor Cyan
+    Write-Host "  Get one at: https://console.anthropic.com/settings/keys" -ForegroundColor Cyan
+    Write-Host "  Keys look like: sk-ant-api03-..." -ForegroundColor DarkGray
+    $secure = Read-Host "  Paste API key" -AsSecureString
+    $plain  = [System.Net.NetworkCredential]::new("", $secure).Password
+    if (-not $plain) { return $null }
+
+    $save = Read-Host "  Save encrypted for future runs? [Y/n]"
+    if ($save -eq "" -or $save -match "^[Yy]") {
+        Save-ApiKey $plain
+        Write-Host "  Saved to $($script:CredFile)" -ForegroundColor Green
+        Write-Host "  Future runs will not prompt for the key." -ForegroundColor Green
+    }
+
+    return $plain
+}
+
+# ── Claude API: generate automation.ps1 + walkthrough.md ──────────────────────
+if (-not $SkipGenerate) {
+    $ApiKey = Get-ApiKey -Explicit $ApiKey
+
     if (-not $ApiKey) {
-        Write-Warning "No Anthropic API key found — skipping automation.ps1 / walkthrough.md generation."
-        Write-Warning "Set `$env:ANTHROPIC_API_KEY, pass -ApiKey, or create PSR-Tools\config.json: { `"anthropic_api_key`": `"sk-ant-...`" }"
+        Write-Warning "No API key provided — skipping automation.ps1 / walkthrough.md generation."
     } else {
         Write-Host ""
         Write-Host "Calling Claude API (Haiku) to generate outputs..."
