@@ -342,9 +342,7 @@ Remove-Item -Path $tempDir -Recurse -Force
 # Encrypted blob stored at %APPDATA%\PSR-Tools\api_key.cred — useless on any other
 # account or machine, safe to leave on disk.
 
-$script:CredFile   = Join-Path $env:APPDATA "PSR-Tools\api_key.cred"
-$script:GistIdFile = Join-Path $env:APPDATA "PSR-Tools\gist_id.txt"
-$script:GhExe      = "C:\Program Files\GitHub CLI\gh.exe"
+$script:CredFile = Join-Path $env:APPDATA "PSR-Tools\api_key.cred"
 
 function Save-ApiKey([string]$Plain) {
     $dir = Split-Path $script:CredFile
@@ -361,7 +359,7 @@ function Get-ApiKey([string]$Explicit) {
     # 2. Environment variable
     if ($env:ANTHROPIC_API_KEY) { return $env:ANTHROPIC_API_KEY }
 
-    # 3. DPAPI local cache (fast, offline — written by both Gist fetch and direct setup)
+    # 3. DPAPI local cache — encrypted with your Windows account, never leaves this machine
     if (Test-Path $script:CredFile) {
         try {
             $plain = Get-Content $script:CredFile -Raw |
@@ -369,65 +367,22 @@ function Get-ApiKey([string]$Explicit) {
                      ForEach-Object { [System.Net.NetworkCredential]::new("", $_).Password }
             if ($plain) { return $plain }
         } catch {
-            Write-Warning "  Stored key could not be decrypted — will re-fetch."
+            Write-Warning "  Stored key could not be decrypted — prompting again."
             Remove-Item $script:CredFile -Force
         }
     }
 
-    # 4. Private GitHub Gist (cross-machine — requires gh auth login)
-    if ((Test-Path $script:GistIdFile) -and (Test-Path $script:GhExe)) {
-        $gistId    = (Get-Content $script:GistIdFile -Raw).Trim()
-        $authCheck = & $script:GhExe auth status 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            try {
-                $lines = @(& $script:GhExe gist view $gistId --raw 2>$null)
-                $plain = ($lines | Where-Object { $_ -match '^sk-ant-' } | Select-Object -First 1)
-                if ($plain) { $plain = $plain.Trim() }
-                if ($LASTEXITCODE -eq 0 -and $plain -match "^sk-ant-") {
-                    Write-Host "  API key fetched from GitHub Gist." -ForegroundColor DarkGray
-                    Save-ApiKey $plain   # cache locally for next run
-                    return $plain
-                }
-            } catch {
-                Write-Warning "  Could not fetch Gist $gistId`: $_"
-            }
-        } else {
-            Write-Host "  Gist ID found but not logged into GitHub." -ForegroundColor DarkYellow
-            Write-Host "  Run: gh auth login   (then re-run this script)" -ForegroundColor DarkYellow
-        }
-    }
-
-    # 5. config.json migration (one-time, then key moves to encrypted file)
-    $configPath = Join-Path $PSScriptRoot "config.json"
-    if (Test-Path $configPath) {
-        try {
-            $cfg       = Get-Content $configPath -Raw | ConvertFrom-Json
-            $candidate = $cfg.anthropic_api_key.Trim()
-            if ($candidate -and $candidate -notmatch "YOUR_KEY" -and $candidate -match "^sk-ant-api") {
-                Write-Host "  Migrating key from config.json to encrypted credential file..." -ForegroundColor DarkYellow
-                Save-ApiKey $candidate
-                Write-Host "  Saved. You can now delete config.json." -ForegroundColor Green
-                return $candidate
-            }
-        } catch { }
-    }
-
-    # 6. Interactive prompt — first-time setup on a machine with no Gist configured
+    # 4. One-time interactive prompt — answer is saved so this only runs once per machine
     Write-Host ""
-    Write-Host "  Anthropic API key needed." -ForegroundColor Cyan
-    Write-Host "  Tip: run Set-PSRCredential.ps1 once to store it in a private GitHub Gist" -ForegroundColor DarkGray
-    Write-Host "       so it's available automatically on every machine." -ForegroundColor DarkGray
-    Write-Host "  Get a key at: https://console.anthropic.com/settings/keys" -ForegroundColor Cyan
+    Write-Host "  Anthropic API key needed (one-time setup on this machine)." -ForegroundColor Cyan
+    Write-Host "  Get one at: https://console.anthropic.com/settings/keys" -ForegroundColor Cyan
+    Write-Host "  The key will be encrypted and stored locally — never uploaded anywhere." -ForegroundColor DarkGray
     $secure = Read-Host "  Paste API key" -AsSecureString
     $plain  = [System.Net.NetworkCredential]::new("", $secure).Password
     if (-not $plain) { return $null }
 
-    $save = Read-Host "  Cache encrypted locally for this machine? [Y/n]"
-    if ($save -eq "" -or $save -match "^[Yy]") {
-        Save-ApiKey $plain
-        Write-Host "  Cached to $($script:CredFile)" -ForegroundColor Green
-    }
-
+    Save-ApiKey $plain
+    Write-Host "  Saved to $($script:CredFile) (DPAPI encrypted, this machine only)" -ForegroundColor Green
     return $plain
 }
 
