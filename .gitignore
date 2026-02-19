@@ -1,0 +1,8 @@
+# API key — never commit this
+config.json
+
+# Generated output folders
+output/
+
+# Temp files
+*.tmp
